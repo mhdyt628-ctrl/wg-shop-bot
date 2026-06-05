@@ -1,18 +1,19 @@
 import logging
 import json
 import os
-import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 BOT_TOKEN = "8838210157:AAGyT2CI1Un4z9ok_hicEWcxGANOvmkkZN0"
 ADMIN_ID = 6825957050
-BOT_USERNAME = "WG_SHEKAN_bot"
 DB_FILE = "shop_data.json"
 
 def load_db():
     if not os.path.exists(DB_FILE):
-        return {"services": [], "orders": []}
+        return {"services": [
+            {"id": 1, "name": "خدمت نمونه ۱", "desc": "توضیحات اول", "price": 50000},
+            {"id": 2, "name": "خدمت نمونه ۲", "desc": "توضیحات دوم", "price": 100000},
+        ], "orders": []}
     with open(DB_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -20,178 +21,122 @@ def save_db(data):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def init_db():
-    if not os.path.exists(DB_FILE):
-        save_db({
-            "services": [
-                {"id": 1, "name": "خدمت نمونه ۱", "desc": "توضیحات خدمت اول", "price": 50000},
-                {"id": 2, "name": "خدمت نمونه ۲", "desc": "توضیحات خدمت دوم", "price": 100000},
-            ],
-            "orders": []
-        })
-
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 carts = {}
 
-def main_menu_keyboard(user_id):
-    buttons = [
-        [InlineKeyboardButton("🛍 مشاهده خدمات", callback_data="services")],
+def main_menu(uid):
+    b = [
+        [InlineKeyboardButton("🛍 خدمات", callback_data="services")],
         [InlineKeyboardButton("🛒 سبد خرید", callback_data="cart")],
-        [InlineKeyboardButton("📦 سفارش‌های من", callback_data="my_orders")],
     ]
-    if user_id == ADMIN_ID:
-        buttons.append([InlineKeyboardButton("⚙️ پنل مدیریت", callback_data="admin")])
-    return InlineKeyboardMarkup(buttons)
+    if uid == ADMIN_ID:
+        b.append([InlineKeyboardButton("⚙️ مدیریت", callback_data="admin")])
+    return InlineKeyboardMarkup(b)
 
-def services_keyboard(services):
-    buttons = [[InlineKeyboardButton(f"{s['name']} — {s['price']:,} تومان", callback_data=f"buy_{s['id']}")] for s in services]
-    buttons.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")])
-    return InlineKeyboardMarkup(buttons)
-
-def cart_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 پرداخت", callback_data="pay")],
-        [InlineKeyboardButton("🗑 خالی کردن سبد", callback_data="clear_cart")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")],
-    ])
-
-def admin_keyboard():
+def admin_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ افزودن خدمت", callback_data="admin_add")],
         [InlineKeyboardButton("📋 لیست خدمات", callback_data="admin_list")],
-        [InlineKeyboardButton("📊 سفارش‌ها", callback_data="admin_orders")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back")],
     ])
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
     await update.message.reply_text(
-        f"سلام {user.first_name} عزیز! 👋\n\nبه فروشگاه ما خوش اومدی.",
-        reply_markup=main_menu_keyboard(user.id)
+        f"سلام {update.effective_user.first_name}! 👋\nبه فروشگاه خوش اومدی.",
+        reply_markup=main_menu(update.effective_user.id)
     )
 
-async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    data = query.data
+async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    d = q.data
     db = load_db()
 
-    if data == "back_main":
-        await query.edit_message_text("منوی اصلی:", reply_markup=main_menu_keyboard(user_id))
-    elif data == "services":
-        services = db["services"]
-        if not services:
-            await query.edit_message_text("❌ هیچ خدمتی موجود نیست.", reply_markup=main_menu_keyboard(user_id))
+    if d == "back":
+        await q.edit_message_text("منوی اصلی:", reply_markup=main_menu(uid))
+    elif d == "services":
+        svcs = db["services"]
+        if not svcs:
+            await q.edit_message_text("خدمتی موجود نیست.", reply_markup=main_menu(uid))
             return
-        text = "🛍 *خدمات موجود:*\n\n"
-        for s in services:
-            text += f"• *{s['name']}*\n  {s['desc']}\n  💰 {s['price']:,} تومان\n\n"
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=services_keyboard(services))
-    elif data.startswith("buy_"):
-        sid = int(data.split("_")[1])
-        service = next((s for s in db["services"] if s["id"] == sid), None)
-        if service:
-            if user_id not in carts:
-                carts[user_id] = []
-            carts[user_id].append(service)
-            await query.answer(f"✅ {service['name']} به سبد اضافه شد!", show_alert=True)
-    elif data == "cart":
-        cart = carts.get(user_id, [])
+        text = "🛍 *خدمات:*\n\n" + "".join(f"• *{s['name']}* — {s['price']:,} تومان\n  {s['desc']}\n\n" for s in svcs)
+        btns = [[InlineKeyboardButton(f"خرید: {s['name']}", callback_data=f"buy_{s['id']}")] for s in svcs]
+        btns.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back")])
+        await q.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(btns))
+    elif d.startswith("buy_"):
+        sid = int(d.split("_")[1])
+        svc = next((s for s in db["services"] if s["id"] == sid), None)
+        if svc:
+            carts.setdefault(uid, []).append(svc)
+            await q.answer(f"✅ {svc['name']} اضافه شد!", show_alert=True)
+    elif d == "cart":
+        cart = carts.get(uid, [])
         if not cart:
-            await query.edit_message_text("🛒 سبد خرید شما خالیه.", reply_markup=main_menu_keyboard(user_id))
-            return
-        text = "🛒 *سبد خرید:*\n\n"
-        total = sum(i["price"] for i in cart)
-        for item in cart:
-            text += f"• {item['name']} — {item['price']:,} تومان\n"
-        text += f"\n💰 *جمع کل: {total:,} تومان*"
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=cart_keyboard())
-    elif data == "clear_cart":
-        carts[user_id] = []
-        await query.edit_message_text("🗑 سبد خرید خالی شد.", reply_markup=main_menu_keyboard(user_id))
-    elif data == "pay":
-        cart = carts.get(user_id, [])
-        if not cart:
-            await query.edit_message_text("سبد خرید خالیه!", reply_markup=main_menu_keyboard(user_id))
+            await q.edit_message_text("🛒 سبد خالیه.", reply_markup=main_menu(uid))
             return
         total = sum(i["price"] for i in cart)
-        await query.edit_message_text(
-            f"💳 مبلغ: {total:,} تومان\n\nلطفاً با ادمین تماس بگیرید.",
-            reply_markup=main_menu_keyboard(user_id)
-        )
-    elif data == "my_orders":
-        orders = [o for o in db["orders"] if o["user_id"] == user_id]
-        if not orders:
-            await query.edit_message_text("📦 هنوز سفارشی ثبت نکردی.", reply_markup=main_menu_keyboard(user_id))
+        text = "🛒 *سبد خرید:*\n\n" + "".join(f"• {i['name']} — {i['price']:,} تومان\n" for i in cart)
+        text += f"\n💰 *جمع: {total:,} تومان*"
+        await q.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("💳 پرداخت", callback_data="pay")],
+            [InlineKeyboardButton("🗑 خالی کردن", callback_data="clear")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="back")],
+        ]))
+    elif d == "clear":
+        carts[uid] = []
+        await q.edit_message_text("سبد خالی شد.", reply_markup=main_menu(uid))
+    elif d == "pay":
+        cart = carts.get(uid, [])
+        if not cart:
+            await q.edit_message_text("سبد خالیه!", reply_markup=main_menu(uid))
             return
-        text = "📦 *سفارش‌های شما:*\n\n"
-        for o in orders[-10:]:
-            text += f"• {o['total']:,} تومان | {o['status']}\n"
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=main_menu_keyboard(user_id))
-    elif data == "admin" and user_id == ADMIN_ID:
-        await query.edit_message_text("⚙️ پنل مدیریت:", reply_markup=admin_keyboard())
-    elif data == "admin_list" and user_id == ADMIN_ID:
-        text = "📋 *لیست خدمات:*\n\n"
-        for s in db["services"]:
-            text += f"🔹 ID:{s['id']} | {s['name']} | {s['price']:,} تومان\n"
-        await query.edit_message_text(text or "خدمتی وجود نداره.", parse_mode="Markdown", reply_markup=admin_keyboard())
-    elif data == "admin_orders" and user_id == ADMIN_ID:
-        orders = db["orders"][-20:]
-        if not orders:
-            await query.edit_message_text("هیچ سفارشی وجود نداره.", reply_markup=admin_keyboard())
-            return
-        text = "📊 *آخرین سفارش‌ها:*\n\n"
-        for o in orders:
-            text += f"👤 {o['user_id']} | {o['total']:,} تومان | {o['status']}\n"
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=admin_keyboard())
-    elif data == "admin_add" and user_id == ADMIN_ID:
-        ctx.user_data["step"] = "name"
-        ctx.user_data["svc"] = {}
-        await query.edit_message_text("📝 نام خدمت را بفرست:")
+        total = sum(i["price"] for i in cart)
+        await q.edit_message_text(f"💳 مبلغ: {total:,} تومان\n\nبا ادمین تماس بگیرید.", reply_markup=main_menu(uid))
+    elif d == "admin" and uid == ADMIN_ID:
+        await q.edit_message_text("⚙️ پنل مدیریت:", reply_markup=admin_menu())
+    elif d == "admin_list" and uid == ADMIN_ID:
+        text = "📋 *خدمات:*\n\n" + "".join(f"ID:{s['id']} | {s['name']} | {s['price']:,}\n" for s in db["services"])
+        await q.edit_message_text(text or "خدمتی نیست.", parse_mode="Markdown", reply_markup=admin_menu())
+    elif d == "admin_add" and uid == ADMIN_ID:
+        ctx.user_data.update({"step": "name", "svc": {}})
+        await q.edit_message_text("نام خدمت را بفرست:")
 
-async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
-    if user_id != ADMIN_ID or "step" not in ctx.user_data:
+async def msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid != ADMIN_ID or "step" not in ctx.user_data:
         return
     step = ctx.user_data["step"]
-    svc = ctx.user_data.get("svc", {})
+    svc = ctx.user_data["svc"]
+    text = update.message.text
     if step == "name":
         svc["name"] = text
-        ctx.user_data["svc"] = svc
         ctx.user_data["step"] = "desc"
-        await update.message.reply_text("📝 توضیحات را بفرست:")
+        await update.message.reply_text("توضیحات را بفرست:")
     elif step == "desc":
         svc["desc"] = text
-        ctx.user_data["svc"] = svc
         ctx.user_data["step"] = "price"
-        await update.message.reply_text("💰 قیمت (تومان) را بفرست:")
+        await update.message.reply_text("قیمت (تومان) را بفرست:")
     elif step == "price":
         try:
-            price = int(text.replace(",", "").replace("،", ""))
             db = load_db()
             svc["id"] = max((s["id"] for s in db["services"]), default=0) + 1
-            svc["price"] = price
+            svc["price"] = int(text.replace(",","").replace("،",""))
             db["services"].append(svc)
             save_db(db)
             ctx.user_data.clear()
-            await update.message.reply_text(f"✅ خدمت اضافه شد!\n📌 {svc['name']}\n💰 {price:,} تومان", reply_markup=admin_keyboard())
-        except ValueError:
-            await update.message.reply_text("❌ قیمت باید عدد باشه.")
+            await update.message.reply_text(f"✅ خدمت '{svc['name']}' اضافه شد!", reply_markup=admin_menu())
+        except:
+            await update.message.reply_text("قیمت باید عدد باشه.")
 
-async def main():
-    init_db()
+def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    logger.info("ربات شروع به کار کرد...")
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling(drop_pending_updates=True)
-    await asyncio.Event().wait()
+    app.add_handler(CallbackQueryHandler(btn))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg))
+    logger.info("ربات شروع شد!")
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
