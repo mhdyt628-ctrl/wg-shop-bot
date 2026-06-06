@@ -3,7 +3,7 @@ import json
 import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 BOT_TOKEN = "8838210157:AAGyT2CI1Un4z9ok_hicEWcxGANOvmkkZN0"
@@ -11,6 +11,8 @@ ADMIN_ID = 6825957050
 ADMIN_USERNAME = "Khanmahdix"
 BOT_USERNAME = "WG_SHEKAN_bot"
 CHANNEL_LINK = "https://t.me/WGSHEKAN"
+CARD_NUMBER = "6219 8619 2331 7340"
+REFERRAL_BONUS = 10000
 DB_FILE = "shop_data.json"
 
 class Handler(BaseHTTPRequestHandler):
@@ -27,10 +29,16 @@ def run_server():
 
 def load_db():
     if not os.path.exists(DB_FILE):
-        return {"services": [
-            {"id": 1, "name": "خدمت نمونه ۱", "desc": "توضیحات اول", "price": 50000},
-            {"id": 2, "name": "خدمت نمونه ۲", "desc": "توضیحات دوم", "price": 100000},
-        ], "orders": [], "user_subscriptions": {}}
+        return {
+            "services": [
+                {"id": 1, "name": "خدمت نمونه ۱", "price": 50000},
+                {"id": 2, "name": "خدمت نمونه ۲", "price": 100000},
+            ],
+            "orders": [],
+            "user_subscriptions": {},
+            "wallets": {},
+            "referred_users": []
+        }
     with open(DB_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -38,15 +46,21 @@ def save_db(data):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+def get_wallet(db, uid):
+    uid = str(uid)
+    if uid not in db.get("wallets", {}):
+        db.setdefault("wallets", {})[uid] = {"charged": 0, "spent": 0, "gift": 0}
+    return db["wallets"][uid]
+
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
-carts = {}
 
 def main_menu(uid):
     b = [
-        [InlineKeyboardButton("🛒 خرید اشتراک", callback_data="services")],
-        [InlineKeyboardButton("📋 اشتراک های من", callback_data="my_subs")],
-        [InlineKeyboardButton("👥 معرفی به دوستان", callback_data="refer")],
+        [InlineKeyboardButton("🛒 خرید اشتراک", callback_data="services"),
+         InlineKeyboardButton("📋 اشتراک های من", callback_data="my_subs")],
+        [InlineKeyboardButton("👥 معرفی به دوستان", callback_data="refer"),
+         InlineKeyboardButton("👛 کیف پول", callback_data="wallet")],
         [InlineKeyboardButton("📢 کانال اطلاع رسانی", url=CHANNEL_LINK)],
     ]
     if uid == ADMIN_ID:
@@ -61,14 +75,42 @@ def admin_menu():
     ])
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.get_bot().set_my_commands([
+        BotCommand("start", "شروع / منوی اصلی"),
+    ])
+
+    uid = update.effective_user.id
     name = update.effective_user.first_name
+    db = load_db()
+
+    # بررسی رفرال
+    args = ctx.args
+    if args and args[0].startswith("ref_"):
+        referrer_id = str(args[0].split("_")[1])
+        referred = db.setdefault("referred_users", [])
+        if str(uid) not in referred and referrer_id != str(uid):
+            referred.append(str(uid))
+            wallet = get_wallet(db, referrer_id)
+            wallet["gift"] += REFERRAL_BONUS
+            save_db(db)
+            try:
+                await ctx.bot.send_message(
+                    chat_id=int(referrer_id),
+                    text=f"🎉 یک نفر با لینک دعوت شما وارد ربات شد!\n💰 {REFERRAL_BONUS:,} تومان اعتبار هدیه به کیف پول شما اضافه شد."
+                )
+            except:
+                pass
+
     welcome = (
+        f"┌─────────────────────┐\n"
+        f"⚡️ *فقط با ایرانسل و اپ اختصاصی ما*\n"
+        f"└─────────────────────┘\n\n"
         f"سلام {name} عزیز! 👋\n"
         f"به فروشگاه رسمی WG SHEKAN خوش اومدی 🎮\n"
         f"اینجا می‌تونی اشتراک‌های خودت رو به راحتی خریداری کنی.\n"
         f"برای شروع از منوی پایین استفاده کن 👇"
     )
-    await update.message.reply_text(welcome, reply_markup=main_menu(update.effective_user.id))
+    await update.message.reply_text(welcome, parse_mode="Markdown", reply_markup=main_menu(uid))
 
 async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -93,34 +135,115 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif d.startswith("buy_"):
         sid = int(d.split("_")[1])
         svc = next((s for s in db["services"] if s["id"] == sid), None)
-        if svc:
-            username = q.from_user.username or "بدون یوزرنیم"
-            full_name = q.from_user.full_name
-            text = (
-                f"🔔 *درخواست خرید جدید!*\n\n"
-                f"👤 نام: {full_name}\n"
-                f"🆔 یوزرنیم: @{username}\n"
-                f"📦 سرویس: {svc['name']}\n"
-                f"💰 قیمت: {svc['price']:,} تومان\n"
-                f"📝 توضیحات: {svc['desc']}"
-            )
-            try:
-                await ctx.bot.send_message(chat_id=ADMIN_ID, text=text, parse_mode="Markdown")
-            except:
-                pass
+        if not svc:
+            return
+        wallet = get_wallet(db, uid)
+        total_balance = wallet["charged"] + wallet["gift"] - wallet["spent"]
+        price = svc["price"]
+
+        if total_balance >= price:
+            # پرداخت با کیف پول
+            btns = [
+                [InlineKeyboardButton("✅ پرداخت با کیف پول", callback_data=f"paywallet_{sid}")],
+                [InlineKeyboardButton("💳 پرداخت کارت به کارت", callback_data=f"paycard_{sid}")],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="services")],
+            ]
             await q.edit_message_text(
-                f"✅ درخواست *{svc['name']}* ثبت شد!\n\n"
-                f"ادمین به زودی باهات تماس می‌گیره و بعد از پرداخت سرویست فعال میشه.\n"
-                f"📞 ارتباط با ادمین: @{ADMIN_USERNAME}",
+                f"📦 *{svc['name']}*\n💰 قیمت: {price:,} تومان\n👛 موجودی کیف پول: {total_balance:,} تومان\n\nروش پرداخت رو انتخاب کن:",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(btns))
+        else:
+            await q.edit_message_text(
+                f"📦 *{svc['name']}*\n💰 قیمت: {price:,} تومان\n\n"
+                f"✅ سفارش با موفقیت ثبت شد!\n\n"
+                f"💳 لطفاً مبلغ رو به شماره کارت زیر واریز کن و تصویر رسید رو برای ادمین بفرست:\n"
+                f"`{CARD_NUMBER}`\n\n"
+                f"📌 بعد از تأیید پرداخت، سرویست در کمتر از ۳۰ دقیقه الی ۱ ساعت فعال میشه 🚀",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back")]]))
+            username = q.from_user.username or "بدون یوزرنیم"
+            order_id = len(db.get("orders", [])) + 1
+            db.setdefault("orders", []).append({"id": order_id, "uid": uid, "sid": sid, "status": "pending"})
+            save_db(db)
+            try:
+                await ctx.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=(
+                        f"🔔 *درخواست خرید جدید!*\n\n"
+                        f"👤 نام: {q.from_user.full_name}\n"
+                        f"🆔 یوزرنیم: @{username}\n"
+                        f"🆔 آیدی: {uid}\n"
+                        f"📦 سرویس: {svc['name']}\n"
+                        f"💰 قیمت: {price:,} تومان\n"
+                        f"🔢 شماره سفارش: {order_id}"
+                    ),
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("✅ تأیید پرداخت", callback_data=f"confirm_{order_id}_{uid}_{price}")
+                    ]])
+                )
+            except:
+                pass
+
+    elif d.startswith("paywallet_"):
+        sid = int(d.split("_")[1])
+        svc = next((s for s in db["services"] if s["id"] == sid), None)
+        if not svc:
+            return
+        wallet = get_wallet(db, uid)
+        gift = wallet["gift"]
+        price = svc["price"]
+        if gift >= price:
+            wallet["gift"] -= price
+        else:
+            wallet["spent"] += price - gift
+            wallet["gift"] = 0
+        db.setdefault("user_subscriptions", {}).setdefault(str(uid), []).append(svc["name"])
+        save_db(db)
+        await q.edit_message_text(
+            f"✅ پرداخت با کیف پول انجام شد!\n📦 سرویس *{svc['name']}* فعال شد.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back")]]))
+        try:
+            await ctx.bot.send_message(chat_id=ADMIN_ID,
+                text=f"💳 پرداخت کیف پول:\n👤 {q.from_user.full_name}\n📦 {svc['name']}", parse_mode="Markdown")
+        except:
+            pass
+
+    elif d.startswith("confirm_"):
+        if uid != ADMIN_ID:
+            return
+        parts = d.split("_")
+        order_id = int(parts[1])
+        customer_uid = int(parts[2])
+        amount = int(parts[3])
+        wallet = get_wallet(db, customer_uid)
+        wallet["charged"] += amount
+        save_db(db)
+        await q.edit_message_text(f"✅ پرداخت سفارش {order_id} تأیید شد و {amount:,} تومان به کیف پول مشتری اضافه شد.")
+        try:
+            await ctx.bot.send_message(chat_id=customer_uid,
+                text=f"✅ پرداخت شما تأیید شد!\n📦 سرویست در کمتر از ۳۰ دقیقه تا ۱ ساعت فعال میشه 🚀")
+        except:
+            pass
+
+    elif d == "wallet":
+        wallet = get_wallet(db, uid)
+        total_balance = wallet["charged"] + wallet["gift"] - wallet["spent"]
+        text = (
+            f"👛 *کیف پول من*\n\n"
+            f"💰 موجودی قابل استفاده: *{total_balance:,} تومان*\n\n"
+            f"📥 کل شارژ: {wallet['charged']:,} تومان\n"
+            f"📤 کل خرج: {wallet['spent']:,} تومان\n"
+            f"🎁 اعتبار هدیه: {wallet['gift']:,} تومان"
+        )
+        await q.edit_message_text(text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back")]]))
 
     elif d == "my_subs":
-        db = load_db()
         subs = db.get("user_subscriptions", {}).get(str(uid), [])
         if not subs:
-            await q.edit_message_text(
-                "📋 *اشتراک های من*\n\nهنوز اشتراکی خریداری نکردی.",
+            await q.edit_message_text("📋 *اشتراک های من*\n\nهنوز اشتراکی خریداری نکردی.",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back")]]))
         else:
@@ -131,7 +254,7 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif d == "refer":
         link = f"https://t.me/{BOT_USERNAME}?start=ref_{uid}"
         await q.edit_message_text(
-            f"👥 *معرفی به دوستان*\n\nلینک اختصاصی تو:\n`{link}`\n\nاین لینک رو برای دوستات بفرست!",
+            f"👥 *معرفی به دوستان*\n\nبه ازای هر نفری که با لینک تو وارد بشه *{REFERRAL_BONUS:,} تومان* اعتبار هدیه می‌گیری! 🎁\n\nلینک اختصاصی تو:\n`{link}`",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back")]]))
 
@@ -155,10 +278,6 @@ async def msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if step == "name":
         svc["name"] = text
-        ctx.user_data["step"] = "desc"
-        await update.message.reply_text("توضیحات را بفرست:")
-    elif step == "desc":
-        svc["desc"] = text
         ctx.user_data["step"] = "price"
         await update.message.reply_text("قیمت (تومان) را بفرست:")
     elif step == "price":
