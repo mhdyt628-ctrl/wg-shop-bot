@@ -142,26 +142,29 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if total_balance >= price:
             btns = [
-                [InlineKeyboardButton("✅ پرداخت با کیف پول", callback_data=f"paywallet_{sid}")],
-                [InlineKeyboardButton("💳 پرداخت کارت به کارت", callback_data=f"paycard_{sid}")],
+                [InlineKeyboardButton("✅ پرداخت با کیف پول", callback_data=f"pwallet_{sid}")],
+                [InlineKeyboardButton("💳 پرداخت کارت به کارت", callback_data=f"pcard_{sid}")],
                 [InlineKeyboardButton("🔙 بازگشت", callback_data="services")],
             ]
             await q.edit_message_text(
-                f"📦 *{svc['name']}*\n💰 قیمت: {price:,} تومان\n👛 موجودی کیف پول: {total_balance:,} تومان\n\nروش پرداخت رو انتخاب کن:",
+                f"📦 *{svc['name']}*\n💰 قیمت: {price:,} تومان\n👛 موجودی: {total_balance:,} تومان\n\nروش پرداخت:",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(btns))
         else:
-            order_id = len(db.get("orders", [])) + 1
-            db.setdefault("orders", []).append({"id": order_id, "uid": uid, "sid": sid, "status": "pending"})
+            orders = db.setdefault("orders", [])
+            order_id = len(orders) + 1
+            orders.append({"id": order_id, "uid": uid, "sid": sid, "status": "pending"})
             db.setdefault("pending_receipts", {})[str(order_id)] = {
-                "uid": uid, "sid": sid, "svc_name": svc["name"], "price": price,
+                "uid": uid, "sid": sid,
+                "svc_name": svc["name"],
+                "price": price,
                 "name": q.from_user.full_name,
                 "username": q.from_user.username or "بدون یوزرنیم"
             }
             save_db(db)
             await q.edit_message_text(
                 f"📦 *{svc['name']}*\n💰 قیمت: {price:,} تومان\n\n"
-                f"💳 لطفاً مبلغ رو به شماره کارت زیر واریز کن:\n"
+                f"💳 مبلغ رو به شماره کارت زیر واریز کن:\n"
                 f"`{CARD_NUMBER}`\n\n"
                 f"📌 بعد از واریز دکمه زیر رو بزن 👇",
                 parse_mode="Markdown",
@@ -174,13 +177,13 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await ctx.bot.send_message(
                     chat_id=ADMIN_ID,
                     text=(
-                        f"🔔 *سفارش جدید — منتظر رسید*\n\n"
-                        f"👤 نام: {q.from_user.full_name}\n"
-                        f"🆔 یوزرنیم: @{q.from_user.username or 'بدون یوزرنیم'}\n"
-                        f"🆔 آیدی: {uid}\n"
-                        f"📦 سرویس: {svc['name']}\n"
-                        f"💰 قیمت: {price:,} تومان\n"
-                        f"🔢 شماره سفارش: {order_id}"
+                        f"🔔 *سفارش جدید*\n\n"
+                        f"👤 {q.from_user.full_name}\n"
+                        f"🆔 @{q.from_user.username or 'بدون یوزرنیم'}\n"
+                        f"📱 آیدی: {uid}\n"
+                        f"📦 {svc['name']}\n"
+                        f"💰 {price:,} تومان\n"
+                        f"🔢 سفارش: {order_id}"
                     ),
                     parse_mode="Markdown"
                 )
@@ -189,7 +192,7 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif d.startswith("paid_"):
         order_id = d.split("_")[1]
-        ctx.user_data["waiting_receipt_order"] = order_id
+        ctx.user_data["waiting_receipt"] = order_id
         await q.edit_message_text(
             "📎 خیلی خوب! حالا تصویر رسید واریز رو برام بفرست 👇",
             reply_markup=InlineKeyboardMarkup([
@@ -197,21 +200,24 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
-    elif d.startswith("paycard_"):
+    elif d.startswith("pcard_"):
         sid = int(d.split("_")[1])
         svc = next((s for s in db["services"] if s["id"] == sid), None)
         if not svc:
             return
-        order_id = len(db.get("orders", [])) + 1
-        db.setdefault("orders", []).append({"id": order_id, "uid": uid, "sid": sid, "status": "pending"})
+        orders = db.setdefault("orders", [])
+        order_id = len(orders) + 1
+        orders.append({"id": order_id, "uid": uid, "sid": sid, "status": "pending"})
         db.setdefault("pending_receipts", {})[str(order_id)] = {
-            "uid": uid, "sid": sid, "svc_name": svc["name"], "price": svc["price"],
+            "uid": uid, "sid": sid,
+            "svc_name": svc["name"],
+            "price": svc["price"],
             "name": q.from_user.full_name,
             "username": q.from_user.username or "بدون یوزرنیم"
         }
         save_db(db)
         await q.edit_message_text(
-            f"💳 لطفاً مبلغ *{svc['price']:,} تومان* رو به شماره کارت زیر واریز کن:\n"
+            f"💳 مبلغ *{svc['price']:,} تومان* رو به شماره کارت زیر واریز کن:\n"
             f"`{CARD_NUMBER}`\n\n"
             f"📌 بعد از واریز دکمه زیر رو بزن 👇",
             parse_mode="Markdown",
@@ -221,39 +227,42 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
-    elif d.startswith("paywallet_"):
+    elif d.startswith("pwallet_"):
         sid = int(d.split("_")[1])
         svc = next((s for s in db["services"] if s["id"] == sid), None)
         if not svc:
             return
         wallet = get_wallet(db, uid)
-        gift = wallet["gift"]
         price = svc["price"]
-        if gift >= price:
+        if wallet["gift"] >= price:
             wallet["gift"] -= price
         else:
-            wallet["spent"] += price - gift
+            rem = price - wallet["gift"]
             wallet["gift"] = 0
+            wallet["spent"] += rem
         db.setdefault("user_subscriptions", {}).setdefault(str(uid), []).append(svc["name"])
         save_db(db)
         await q.edit_message_text(
-            f"✅ پرداخت با کیف پول انجام شد!\n📦 سرویس *{svc['name']}* فعال شد.",
+            f"✅ پرداخت با کیف پول انجام شد!\n📦 *{svc['name']}* فعال شد.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back")]]))
         try:
             await ctx.bot.send_message(chat_id=ADMIN_ID,
-                text=f"💳 پرداخت کیف پول:\n👤 {q.from_user.full_name}\n📦 {svc['name']}", parse_mode="Markdown")
+                text=f"💳 پرداخت کیف پول:\n👤 {q.from_user.full_name}\n📦 {svc['name']}")
         except:
             pass
 
-    elif d.startswith("confirmorder_"):
+    elif d.startswith("ok_"):
         if uid != ADMIN_ID:
             return
-        parts = d.split("_")
-        order_id = parts[1]
-        customer_uid = int(parts[2])
-        amount = int(parts[3])
+        order_id = d.split("_")[1]
         db = load_db()
+        pending = db.get("pending_receipts", {}).get(str(order_id))
+        if not pending:
+            await q.edit_message_text("❌ سفارش پیدا نشد.")
+            return
+        customer_uid = pending["uid"]
+        amount = pending["price"]
         wallet = get_wallet(db, customer_uid)
         wallet["charged"] += amount
         save_db(db)
@@ -267,19 +276,18 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pass
         await ctx.bot.send_message(
             chat_id=ADMIN_ID,
-            text=f"📤 حالا فایل سرویس رو بفرست تا برای مشتری (آیدی: {customer_uid}) ارسال بشه.")
+            text=f"📤 فایل سرویس رو بفرست تا برای مشتری (آیدی: {customer_uid}) ارسال بشه.")
 
     elif d == "wallet":
         wallet = get_wallet(db, uid)
-        total_balance = wallet["charged"] + wallet["gift"] - wallet["spent"]
-        text = (
+        total = wallet["charged"] + wallet["gift"] - wallet["spent"]
+        await q.edit_message_text(
             f"👛 *کیف پول من*\n\n"
-            f"💰 موجودی قابل استفاده: *{total_balance:,} تومان*\n\n"
+            f"💰 موجودی: *{total:,} تومان*\n\n"
             f"📥 کل شارژ: {wallet['charged']:,} تومان\n"
             f"📤 کل خرج: {wallet['spent']:,} تومان\n"
-            f"🎁 اعتبار هدیه: {wallet['gift']:,} تومان"
-        )
-        await q.edit_message_text(text, parse_mode="Markdown",
+            f"🎁 اعتبار هدیه: {wallet['gift']:,} تومان",
+            parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back")]]))
 
     elif d == "my_subs":
@@ -296,7 +304,7 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif d == "refer":
         link = f"https://t.me/{BOT_USERNAME}?start=ref_{uid}"
         await q.edit_message_text(
-            f"👥 *معرفی به دوستان*\n\nبه ازای هر نفری که با لینک تو وارد بشه *{REFERRAL_BONUS:,} تومان* اعتبار هدیه می‌گیری! 🎁\n\nلینک اختصاصی تو:\n`{link}`",
+            f"👥 *معرفی به دوستان*\n\nبه ازای هر نفر *{REFERRAL_BONUS:,} تومان* هدیه می‌گیری! 🎁\n\nلینک تو:\n`{link}`",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back")]]))
 
@@ -328,34 +336,33 @@ async def msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     caption="📦 فایل سرویس شما آماده‌ست! 🚀")
             else:
                 await ctx.bot.send_message(chat_id=customer_uid, text=update.message.text)
-            await update.message.reply_text("✅ فایل با موفقیت برای مشتری ارسال شد.")
+            await update.message.reply_text("✅ فایل برای مشتری ارسال شد.")
         except Exception as e:
-            await update.message.reply_text(f"❌ خطا در ارسال: {e}")
+            await update.message.reply_text(f"❌ خطا: {e}")
         return
 
-    if "waiting_receipt_order" in ctx.user_data and update.message.photo:
-        order_id = ctx.user_data.pop("waiting_receipt_order")
+    if "waiting_receipt" in ctx.user_data and update.message.photo:
+        order_id = ctx.user_data.pop("waiting_receipt")
         pending = db.get("pending_receipts", {}).get(str(order_id), {})
-        caption = (
-            f"🧾 *رسید پرداخت جدید!*\n\n"
-            f"👤 نام: {pending.get('name', '-')}\n"
-            f"🆔 یوزرنیم: @{pending.get('username', '-')}\n"
-            f"🆔 آیدی: {uid}\n"
-            f"📦 سرویس: {pending.get('svc_name', '-')}\n"
-            f"💰 قیمت: {pending.get('price', 0):,} تومان\n"
-            f"🔢 شماره سفارش: {order_id}"
-        )
         try:
             await ctx.bot.send_photo(
                 chat_id=ADMIN_ID,
                 photo=update.message.photo[-1].file_id,
-                caption=caption,
+                caption=(
+                    f"🧾 *رسید پرداخت*\n\n"
+                    f"👤 {pending.get('name', '-')}\n"
+                    f"🆔 @{pending.get('username', '-')}\n"
+                    f"📱 آیدی: {uid}\n"
+                    f"📦 {pending.get('svc_name', '-')}\n"
+                    f"💰 {pending.get('price', 0):,} تومان\n"
+                    f"🔢 سفارش: {order_id}"
+                ),
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("✅ تأیید پرداخت", callback_data=f"confirmorder_{order_id}_{uid}_{pending.get('price', 0)}")
+                    InlineKeyboardButton("✅ تأیید پرداخت", callback_data=f"ok_{order_id}")
                 ]])
             )
-            await update.message.reply_text("✅ رسید شما دریافت شد!\nبعد از تأیید ادمین، سرویست فعال میشه 🚀")
+            await update.message.reply_text("✅ رسید دریافت شد!\nبعد از تأیید ادمین، سرویست فعال میشه 🚀")
         except Exception as e:
             await update.message.reply_text(f"❌ خطا: {e}")
         return
@@ -377,7 +384,7 @@ async def msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 db["services"].append(svc)
                 save_db(db)
                 ctx.user_data.clear()
-                await update.message.reply_text(f"✅ خدمت '{svc['name']}' اضافه شد!", reply_markup=admin_menu())
+                await update.message.reply_text(f"✅ '{svc['name']}' اضافه شد!", reply_markup=admin_menu())
             except:
                 await update.message.reply_text("قیمت باید عدد باشه.")
 
