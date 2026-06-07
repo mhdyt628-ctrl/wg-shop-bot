@@ -37,7 +37,8 @@ def load_db():
             "orders": [],
             "user_subscriptions": {},
             "wallets": {},
-            "referred_users": []
+            "referred_users": [],
+            "pending_receipts": {}
         }
     with open(DB_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -78,12 +79,10 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.get_bot().set_my_commands([
         BotCommand("start", "شروع / منوی اصلی"),
     ])
-
     uid = update.effective_user.id
     name = update.effective_user.first_name
     db = load_db()
 
-    # بررسی رفرال
     args = ctx.args
     if args and args[0].startswith("ref_"):
         referrer_id = str(args[0].split("_")[1])
@@ -142,7 +141,6 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         price = svc["price"]
 
         if total_balance >= price:
-            # پرداخت با کیف پول
             btns = [
                 [InlineKeyboardButton("✅ پرداخت با کیف پول", callback_data=f"paywallet_{sid}")],
                 [InlineKeyboardButton("💳 پرداخت کارت به کارت", callback_data=f"paycard_{sid}")],
@@ -153,23 +151,26 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(btns))
         else:
+            order_id = len(db.get("orders", [])) + 1
+            db.setdefault("orders", []).append({"id": order_id, "uid": uid, "sid": sid, "status": "pending"})
+            db.setdefault("pending_receipts", {})[str(order_id)] = {"uid": uid, "sid": sid, "svc_name": svc["name"], "price": price}
+            save_db(db)
+            ctx.user_data["waiting_receipt_order"] = order_id
             await q.edit_message_text(
                 f"📦 *{svc['name']}*\n💰 قیمت: {price:,} تومان\n\n"
                 f"✅ سفارش با موفقیت ثبت شد!\n\n"
-                f"💳 لطفاً مبلغ رو به شماره کارت زیر واریز کن و تصویر رسید رو برای ادمین بفرست:\n"
+                f"💳 لطفاً مبلغ رو به شماره کارت زیر واریز کن:\n"
                 f"`{CARD_NUMBER}`\n\n"
-                f"📌 بعد از تأیید پرداخت، سرویست در کمتر از ۳۰ دقیقه الی ۱ ساعت فعال میشه 🚀",
+                f"📎 بعد از واریز، تصویر رسید رو همین‌جا برام بفرست.\n"
+                f"📌 بعد از تأیید، سرویست در کمتر از ۳۰ دقیقه الی ۱ ساعت فعال میشه 🚀",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back")]]))
             username = q.from_user.username or "بدون یوزرنیم"
-            order_id = len(db.get("orders", [])) + 1
-            db.setdefault("orders", []).append({"id": order_id, "uid": uid, "sid": sid, "status": "pending"})
-            save_db(db)
             try:
                 await ctx.bot.send_message(
                     chat_id=ADMIN_ID,
                     text=(
-                        f"🔔 *درخواست خرید جدید!*\n\n"
+                        f"🔔 *سفارش جدید — منتظر رسید*\n\n"
                         f"👤 نام: {q.from_user.full_name}\n"
                         f"🆔 یوزرنیم: @{username}\n"
                         f"🆔 آیدی: {uid}\n"
@@ -177,13 +178,27 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         f"💰 قیمت: {price:,} تومان\n"
                         f"🔢 شماره سفارش: {order_id}"
                     ),
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("✅ تأیید پرداخت", callback_data=f"confirm_{order_id}_{uid}_{price}")
-                    ]])
+                    parse_mode="Markdown"
                 )
             except:
                 pass
+
+    elif d.startswith("paycard_"):
+        sid = int(d.split("_")[1])
+        svc = next((s for s in db["services"] if s["id"] == sid), None)
+        if not svc:
+            return
+        order_id = len(db.get("orders", [])) + 1
+        db.setdefault("orders", []).append({"id": order_id, "uid": uid, "sid": sid, "status": "pending"})
+        db.setdefault("pending_receipts", {})[str(order_id)] = {"uid": uid, "sid": sid, "svc_name": svc["name"], "price": svc["price"]}
+        save_db(db)
+        ctx.user_data["waiting_receipt_order"] = order_id
+        await q.edit_message_text(
+            f"💳 لطفاً مبلغ *{svc['price']:,} تومان* رو به شماره کارت زیر واریز کن:\n"
+            f"`{CARD_NUMBER}`\n\n"
+            f"📎 بعد از واریز، تصویر رسید رو همین‌جا بفرست.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back")]]))
 
     elif d.startswith("paywallet_"):
         sid = int(d.split("_")[1])
@@ -214,18 +229,24 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if uid != ADMIN_ID:
             return
         parts = d.split("_")
-        order_id = int(parts[1])
+        order_id = parts[1]
         customer_uid = int(parts[2])
         amount = int(parts[3])
         wallet = get_wallet(db, customer_uid)
         wallet["charged"] += amount
         save_db(db)
-        await q.edit_message_text(f"✅ پرداخت سفارش {order_id} تأیید شد و {amount:,} تومان به کیف پول مشتری اضافه شد.")
+        await q.edit_message_text(f"✅ پرداخت سفارش {order_id} تأیید شد.")
+        ctx.user_data[f"send_file_to_{customer_uid}"] = True
         try:
-            await ctx.bot.send_message(chat_id=customer_uid,
-                text=f"✅ پرداخت شما تأیید شد!\n📦 سرویست در کمتر از ۳۰ دقیقه تا ۱ ساعت فعال میشه 🚀")
+            await ctx.bot.send_message(
+                chat_id=customer_uid,
+                text=f"✅ پرداخت شما تأیید شد!\n📦 سرویست در کمتر از ۳۰ دقیقه تا ۱ ساعت فعال میشه 🚀\nادمین به زودی فایل سرویس رو برات می‌فرسته.")
         except:
             pass
+        await ctx.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"📤 حالا فایل سرویس رو بفرست تا براي مشتری (آیدی: {customer_uid}) ارسال بشه.\n\n(فایل رو مستقیم توی همین چت بفرست)")
+        ctx.user_data["pending_file_uid"] = customer_uid
 
     elif d == "wallet":
         wallet = get_wallet(db, uid)
@@ -271,33 +292,76 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if uid != ADMIN_ID or "step" not in ctx.user_data:
+    db = load_db()
+
+    # ادمین فایل سرویس می‌فرسته
+    if uid == ADMIN_ID and "pending_file_uid" in ctx.user_data:
+        customer_uid = ctx.user_data.pop("pending_file_uid")
+        if update.message.document:
+            await ctx.bot.send_document(chat_id=customer_uid, document=update.message.document.file_id,
+                caption="📦 فایل سرویس شما آماده‌ست! به زودی فعال میشه 🚀")
+            await update.message.reply_text("✅ فایل با موفقیت برای مشتری ارسال شد.")
+        elif update.message.photo:
+            await ctx.bot.send_photo(chat_id=customer_uid, photo=update.message.photo[-1].file_id,
+                caption="📦 فایل سرویس شما آماده‌ست! 🚀")
+            await update.message.reply_text("✅ تصویر با موفقیت برای مشتری ارسال شد.")
+        else:
+            await ctx.bot.send_message(chat_id=customer_uid, text=update.message.text)
+            await update.message.reply_text("✅ پیام برای مشتری ارسال شد.")
         return
-    step = ctx.user_data["step"]
-    svc = ctx.user_data["svc"]
-    text = update.message.text
-    if step == "name":
-        svc["name"] = text
-        ctx.user_data["step"] = "price"
-        await update.message.reply_text("قیمت (تومان) را بفرست:")
-    elif step == "price":
-        try:
-            db = load_db()
-            svc["id"] = max((s["id"] for s in db["services"]), default=0) + 1
-            svc["price"] = int(text.replace(",","").replace("،",""))
-            db["services"].append(svc)
-            save_db(db)
-            ctx.user_data.clear()
-            await update.message.reply_text(f"✅ خدمت '{svc['name']}' اضافه شد!", reply_markup=admin_menu())
-        except:
-            await update.message.reply_text("قیمت باید عدد باشه.")
+
+    # مشتری رسید می‌فرسته
+    if "waiting_receipt_order" in ctx.user_data and update.message.photo:
+        order_id = ctx.user_data.pop("waiting_receipt_order")
+        pending = db.get("pending_receipts", {}).get(str(order_id), {})
+        username = update.effective_user.username or "بدون یوزرنیم"
+        caption = (
+            f"🧾 *رسید پرداخت جدید!*\n\n"
+            f"👤 نام: {update.effective_user.full_name}\n"
+            f"🆔 یوزرنیم: @{username}\n"
+            f"🆔 آیدی: {uid}\n"
+            f"📦 سرویس: {pending.get('svc_name', '-')}\n"
+            f"💰 قیمت: {pending.get('price', 0):,} تومان\n"
+            f"🔢 شماره سفارش: {order_id}"
+        )
+        await ctx.bot.send_photo(
+            chat_id=ADMIN_ID,
+            photo=update.message.photo[-1].file_id,
+            caption=caption,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ تأیید پرداخت", callback_data=f"confirm_{order_id}_{uid}_{pending.get('price', 0)}")
+            ]])
+        )
+        await update.message.reply_text("✅ رسید شما دریافت شد! بعد از تأیید ادمین، سرویست فعال میشه 🚀")
+        return
+
+    # ادمین داره سرویس اضافه می‌کنه
+    if uid == ADMIN_ID and "step" in ctx.user_data:
+        step = ctx.user_data["step"]
+        svc = ctx.user_data["svc"]
+        text = update.message.text
+        if step == "name":
+            svc["name"] = text
+            ctx.user_data["step"] = "price"
+            await update.message.reply_text("قیمت (تومان) را بفرست:")
+        elif step == "price":
+            try:
+                svc["id"] = max((s["id"] for s in db["services"]), default=0) + 1
+                svc["price"] = int(text.replace(",","").replace("،",""))
+                db["services"].append(svc)
+                save_db(db)
+                ctx.user_data.clear()
+                await update.message.reply_text(f"✅ خدمت '{svc['name']}' اضافه شد!", reply_markup=admin_menu())
+            except:
+                await update.message.reply_text("قیمت باید عدد باشه.")
 
 def main():
     threading.Thread(target=run_server, daemon=True).start()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(btn))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, msg))
     logger.info("ربات شروع شد!")
     app.run_polling()
 
