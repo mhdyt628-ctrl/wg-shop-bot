@@ -259,14 +259,18 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         db = load_db()
         pending = db.get("pending_receipts", {}).get(str(order_id))
         if not pending:
-            await q.edit_message_text("❌ سفارش پیدا نشد.")
+            await ctx.bot.send_message(chat_id=ADMIN_ID, text="❌ سفارش پیدا نشد.")
             return
         customer_uid = pending["uid"]
         amount = pending["price"]
         wallet = get_wallet(db, customer_uid)
         wallet["charged"] += amount
         save_db(db)
-        await q.edit_message_text(f"✅ پرداخت سفارش {order_id} تأیید شد.")
+        # به جای edit، پیام جدید می‌فرستیم
+        await ctx.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"✅ پرداخت سفارش {order_id} تأیید شد.\n📤 حالا فایل سرویس رو بفرست تا برای مشتری ارسال بشه."
+        )
         ctx.user_data["pending_file_uid"] = customer_uid
         try:
             await ctx.bot.send_message(
@@ -274,9 +278,6 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 text="✅ پرداخت شما تأیید شد!\n📦 سرویست در کمتر از ۳۰ دقیقه تا ۱ ساعت فعال میشه 🚀\nادمین به زودی فایل سرویس رو برات می‌فرسته.")
         except:
             pass
-        await ctx.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"📤 فایل سرویس رو بفرست تا برای مشتری (آیدی: {customer_uid}) ارسال بشه.")
 
     elif d == "wallet":
         wallet = get_wallet(db, uid)
