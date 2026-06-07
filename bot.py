@@ -168,7 +168,8 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("✅ واریز کردم، رسید می‌فرستم", callback_data=f"paid_{order_id}")],
                     [InlineKeyboardButton("🔙 بازگشت", callback_data="back")]
-                ]))
+                ])
+            )
             try:
                 await ctx.bot.send_message(
                     chat_id=ADMIN_ID,
@@ -191,7 +192,9 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.user_data["waiting_receipt_order"] = order_id
         await q.edit_message_text(
             "📎 خیلی خوب! حالا تصویر رسید واریز رو برام بفرست 👇",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back")]]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="back")]
+            ])
         )
 
     elif d.startswith("paycard_"):
@@ -215,7 +218,8 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ واریز کردم، رسید می‌فرستم", callback_data=f"paid_{order_id}")],
                 [InlineKeyboardButton("🔙 بازگشت", callback_data="back")]
-            ]))
+            ])
+        )
 
     elif d.startswith("paywallet_"):
         sid = int(d.split("_")[1])
@@ -253,7 +257,7 @@ async def btn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         wallet = get_wallet(db, customer_uid)
         wallet["charged"] += amount
         save_db(db)
-        await q.edit_message_text(f"✅ پرداخت سفارش {order_id} تأیید شد و {amount:,} تومان به کیف پول مشتری اضافه شد.")
+        await q.edit_message_text(f"✅ پرداخت سفارش {order_id} تأیید شد.")
         ctx.user_data["pending_file_uid"] = customer_uid
         try:
             await ctx.bot.send_message(
@@ -311,7 +315,6 @@ async def msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     db = load_db()
 
-    # ادمین فایل سرویس می‌فرسته
     if uid == ADMIN_ID and "pending_file_uid" in ctx.user_data:
         customer_uid = ctx.user_data.pop("pending_file_uid")
         try:
@@ -326,11 +329,10 @@ async def msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             else:
                 await ctx.bot.send_message(chat_id=customer_uid, text=update.message.text)
             await update.message.reply_text("✅ فایل با موفقیت برای مشتری ارسال شد.")
-        except:
-            await update.message.reply_text("❌ خطا در ارسال فایل.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا در ارسال: {e}")
         return
 
-    # مشتری رسید می‌فرسته
     if "waiting_receipt_order" in ctx.user_data and update.message.photo:
         order_id = ctx.user_data.pop("waiting_receipt_order")
         pending = db.get("pending_receipts", {}).get(str(order_id), {})
@@ -354,11 +356,10 @@ async def msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 ]])
             )
             await update.message.reply_text("✅ رسید شما دریافت شد!\nبعد از تأیید ادمین، سرویست فعال میشه 🚀")
-        except:
-            await update.message.reply_text("❌ خطا در ارسال رسید.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا: {e}")
         return
 
-    # ادمین داره سرویس اضافه می‌کنه
     if uid == ADMIN_ID and "step" in ctx.user_data:
         step = ctx.user_data["step"]
         svc = ctx.user_data["svc"]
